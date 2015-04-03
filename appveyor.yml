@@ -3,3 +3,7 @@ build_script:
 clone_depth: 1
 test: off
 deploy: off
+cache:
+  - c:\users\appveyor\.dnx\packages
+  - node_modules  -> **\package.json       # local npm modules
+  - c:\users\appveyor\AppData\Roaming\npm-cache.js
