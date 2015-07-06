@@ -149,6 +149,10 @@ namespace Microsoft.AspNet.Routing.Template
                 {
                     context.RouteData = oldRouteData;
                 }
+                else
+                {
+                    Logging.AspNetRoutingEventSource.Log.RequestRouted(context, _target, newRouteData);
+                }
             }
         }
 

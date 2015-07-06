@@ -41,6 +41,12 @@ namespace Microsoft.AspNet.Builder
 
                 await _next.Invoke(httpContext);
             }
+            else
+            {
+                // Use null for RouteData here since this is the root of the route tree.
+                AspNetRoutingEventSource.Log.RequestRouted(context, _router, null);
+                AspNetRoutingEventSource.Log.RoutingTraversalComplete(context);
+            }
         }
     }
 }

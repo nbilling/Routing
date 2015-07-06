@@ -70,6 +70,7 @@ namespace Microsoft.AspNet.Routing
                     await route.RouteAsync(context);
                     if (context.IsHandled)
                     {
+                        AspNetRoutingEventSource.Log.RequestRouted(context, route, newRouteData);
                         break;
                     }
                 }

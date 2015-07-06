@@ -2,7 +2,8 @@
   "description": "ASP.NET 5 middleware and abstractions for routing requests to application logic and for generating links.",
   "version": "1.0.0-*",
   "compilationOptions": {
-    "warningsAsErrors": "true"
+    "warningsAsErrors": "true",
+    "allowUnsafe": true
   },
   "dependencies": {
     "Microsoft.AspNet.Http.Extensions": "1.0.0-*",
@@ -15,7 +16,8 @@
     "dnxcore50": {
       "dependencies": {
         "System.Reflection.Extensions": "4.0.0-beta-*",
-        "System.Text.RegularExpressions": "4.0.10-beta-*"
+        "System.Text.RegularExpressions": "4.0.10-beta-*",
+        "System.Collections": "4.0.10-beta-*"
       }
     }
   }
