@@ -143,11 +143,19 @@ namespace Microsoft.AspNet.Routing.Logging
 
                 foreach (var kvp in dictionary)
                 {
+                    var valueString = kvp.Value.ToString();
                     // Format these with invariant culture if they are formattable.
                     var valueFormattable = kvp.Value as IFormattable;
-                    var valueString = (valueFormattable == null) ?
-                        kvp.Value.ToString() :
-                        valueFormattable.ToString("G", CultureInfo.InvariantCulture);
+                    if (valueFormattable != null)
+                    {
+                        try
+                        {
+                            valueString = valueFormattable.ToString("G", CultureInfo.InvariantCulture);
+                        }
+                        catch (FormatException)
+                        {
+                        }
+                    }
 
                     if (!empty)
                     {

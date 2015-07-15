@@ -62,12 +62,22 @@ namespace Microsoft.AspNet.Routing.Tests
             // Assert
             var deserializedActual = Newtonsoft.Json.JsonConvert.DeserializeObject(actual) as JObject;
             Assert.NotNull(deserializedActual);
-            Assert.True(CompareDictionaries(input, deserializedActual));
+            VerifyDictionariesMatch(input, deserializedActual);
         }
 
-        private bool CompareDictionaries(IDictionary<string, object> dict1, IDictionary<string, JToken> dict2)
+        private void VerifyDictionariesMatch(IDictionary<string, object> dict1, IDictionary<string, JToken> dict2)
         {
-            return dict1.Zip(dict2, CompareKeyValuePairs).All(x => x);
+            // Verify that either both are null, or neither are null + their lengths + elements match.
+            if (dict1 != null || dict2 != null)
+            {
+                Assert.True(dict1 != null && dict2 != null);
+                Assert.Equal(dict1.Count, dict2.Count);
+
+                for (int i = 0; i < dict1.Count; i++)
+                {
+                    Assert.True(CompareKeyValuePairs(dict1.ElementAt(i), dict2.ElementAt(i)));
+                }
+            }
         }
 
         private bool CompareKeyValuePairs(KeyValuePair<string, object> kvp1, KeyValuePair<string, JToken> kvp2)
