@@ -25,6 +25,8 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Framework.WebEncoders;
+using System.Linq;
+using Microsoft.Framework.Internal;
 
 namespace Microsoft.AspNet.Routing.Logging
 {
@@ -39,6 +41,8 @@ namespace Microsoft.AspNet.Routing.Logging
         /// Identifiers for event types from this EventSource.
         /// </summary>
         private const int RequestRoutedId = 1;
+
+        private const int MaxEventDataSizeInBytes = 32000;  // max size of an ETW event is 64k. Limit data payload to under 32k to reduce chance of event getting dropped.
 
         private static Lazy<AspNetRoutingEventSource> _lazyInstance = new Lazy<AspNetRoutingEventSource>(() => new AspNetRoutingEventSource());
         public static AspNetRoutingEventSource Log
@@ -67,9 +71,9 @@ namespace Microsoft.AspNet.Routing.Logging
         }
 
         [Event(RequestRoutedId)]
-        private void RequestRouted(string path, string httpMethod, string requestId, string parameterString, string target, string pathBase)
+        private void RequestRouted(int truncatedAt, string httpMethod, string path, string requestId, string parameterString, string target, string pathBase)
         {
-            WriteEvent(RequestRoutedId, httpMethod, path, requestId, parameterString, target, pathBase);
+            WriteEvent(RequestRoutedId, truncatedAt, httpMethod, path, requestId, parameterString, target, pathBase);
         }
 
         /// <summary>
@@ -92,12 +96,21 @@ namespace Microsoft.AspNet.Routing.Logging
                     if (!_lazyRequestHandled.Value.ContainsKey(requestId))
                     {
                         _lazyRequestHandled.Value.AddOrUpdate(requestId, 0, (s, b) => 0);
-                        RequestRouted(context.HttpContext.Request.Path,
-                            context.HttpContext.Request.Method,
+
+                        // truncate strings if necessary
+                        int truncatedAt;
+                        var arguments = new string[] {
+                            context.HttpContext.Request.Method ?? string.Empty,
+                            context.HttpContext.Request.Path,
                             requestId,
                             GetJsonArgumentsFromDictionary(routeData.Values),
                             target.GetType().Name,
-                            context.HttpContext.Request.PathBase);
+                            context.HttpContext.Request.PathBase };
+                        var truncatedArguments = TruncateStrings(arguments, MaxEventDataSizeInBytes, out truncatedAt);
+
+                        RequestRouted(
+                            truncatedAt == -1 ? truncatedAt : truncatedAt + 1, // adjust truncatedAt index because of the added parameter in front
+                            truncatedArguments[0], truncatedArguments[1], truncatedArguments[2], truncatedArguments[3], truncatedArguments[4], truncatedArguments[5]);
                     }
                 }
             }
@@ -180,35 +193,84 @@ namespace Microsoft.AspNet.Routing.Logging
         }
 
         [NonEvent]
-        private unsafe void WriteEvent(int eventId, params string[] args)
+        private unsafe void WriteEvent(int eventId, int truncatedAt, params string[] args)
         {
-            var dataDesc = stackalloc EventData[args.Length];
-            var handles = stackalloc GCHandle[args.Length];
-            try
+            if (IsEnabled())
             {
-                for (var i = 0; i < args.Length; i++)
+                var dataDesc = stackalloc EventData[args.Length + 1];
+                var handles = stackalloc GCHandle[args.Length];
+                try
                 {
-                    handles[i] = GCHandle.Alloc(args[i], GCHandleType.Pinned);
-                    dataDesc[i].DataPointer = handles[i].AddrOfPinnedObject();
-                    dataDesc[i].Size = (args[i].Length + 1) * sizeof(char);
-                }
-                WriteEventCore(eventId, args.Length, dataDesc);
-            }
-            catch
-            {
-                // don't throw an exception for failure to generate ETW event
-                Debug.Fail("Exception hit while generating ETW event");
-            }
-            finally
-            {
-                for (var i = 0; i < args.Length; i++)
-                {
-                    if (handles[i].IsAllocated)
+                    dataDesc[0].DataPointer = (IntPtr)(&truncatedAt);
+                    dataDesc[0].Size = sizeof(int);
+                    for (var i = 0; i < args.Length; i++)
                     {
-                        handles[i].Free();
+                        if (args[i] == null) args[i] = string.Empty;
+                        handles[i] = GCHandle.Alloc(args[i], GCHandleType.Pinned);
+                        dataDesc[i + 1].DataPointer = handles[i].AddrOfPinnedObject();
+                        dataDesc[i + 1].Size = (args[i].Length + 1) * sizeof(char);
+                    }
+                    WriteEventCore(eventId, args.Length + 1, dataDesc);
+                }
+                catch
+                {
+                    // don't throw an exception for failure to generate ETW event
+                    Debug.Fail("Exception hit while generating ETW event");
+                }
+                finally
+                {
+                    for (var i = 0; i < args.Length; i++)
+                    {
+                        if (handles[i].IsAllocated)
+                        {
+                            handles[i].Free();
+                        }
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// truncate input strings such that their combined size is less than maxDataSize
+        /// Data at the end will be removed first.  Ie, last element will be first to get truncated.
+        /// Elements within args should not be null, or truncation will not occur.
+        /// truncatedAt: index of the first element that got truncated.
+        /// truncatedAt is set to -1 when there is no truncation.
+        /// </summary>
+        [NonEvent]
+        private static string[] TruncateStrings([NotNull] string[] args, int maxDataSizeInBytes, out int truncatedAt)
+        {
+            truncatedAt = -1;
+            var containNulls = args.Any(a => a == null);
+            Debug.Assert(!containNulls, "args should not contains null string");
+
+            if (containNulls || // cannot truncate strings if any of the element is null.
+                args.Sum(a => a.Length + 1) * sizeof(char) <= maxDataSizeInBytes) // no truncation needed.
+            {
+                return args;
+            }
+
+            var results = new string[args.Length];
+            int availableLength = (maxDataSizeInBytes / sizeof(char)) - args.Length;  // subtract space needed for null terminators
+            if (availableLength < 0)
+            {
+                availableLength = 0;
+            }
+            for (int i = 0; i < args.Length; i++)
+            {
+                results[i] = (args[i].Length <= availableLength) ? args[i] : args[i].Substring(0, availableLength);
+                if (results[i].Length < args[i].Length)
+                {
+                    truncatedAt = i;
+                    for (int j = i + 1; j < args.Length; j++)
+                    {
+                        results[j] = string.Empty;
+                    }
+                    break;
+                }
+                availableLength -= results[i].Length;
+            }
+            return results;
         }
     }
 }
